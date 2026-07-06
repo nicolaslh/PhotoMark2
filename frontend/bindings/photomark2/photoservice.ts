@@ -15,8 +15,8 @@ export function LoadImage(path: string): $CancellablePromise<$models.LoadedImage
     });
 }
 
-export function PrintRenderedImage(dataURL: string): $CancellablePromise<$models.SavedImage | null> {
-    return $Call.ByID(2655448310, dataURL).then(($result: any) => {
+export function PrintRenderedImage(dataURL: string, orientation: string): $CancellablePromise<$models.SavedImage | null> {
+    return $Call.ByID(2655448310, dataURL, orientation).then(($result: any) => {
         return $$createType3($result);
     });
 }

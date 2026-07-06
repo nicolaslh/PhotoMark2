@@ -7,7 +7,7 @@ import (
 	"os/exec"
 )
 
-func PrintImage(path string) error {
+func PrintImage(path string, orientation string) error {
 	cmd := exec.Command("open", "-a", "Preview", "-p", path)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("调用 macOS 打印失败: %w: %s", err, string(output))

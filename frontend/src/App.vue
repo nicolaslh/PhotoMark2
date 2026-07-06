@@ -81,6 +81,11 @@ const fitModes = [
   { id: 'cover', name: '裁切填满' },
 ] as const
 
+const paperOrientations = [
+  { id: 'landscape', name: '横向' },
+  { id: 'portrait', name: '纵向' },
+] as const
+
 const sourceInput = ref<HTMLInputElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const previewWrap = ref<HTMLElement | null>(null)
@@ -88,6 +93,7 @@ const imageEl = ref<HTMLImageElement | null>(null)
 const imageURL = ref('')
 const imageInfo = ref<ImageInfo | null>(null)
 const selectedPaper = ref('6in')
+const paperOrientation = ref<(typeof paperOrientations)[number]['id']>('landscape')
 const fitMode = ref<(typeof fitModes)[number]['id']>('contain')
 const isDraggingFile = ref(false)
 const isDraggingWatermark = ref(false)
@@ -125,7 +131,17 @@ let dragOffset = { x: 0, y: 0 }
 let drawMetrics: DrawMetrics | null = null
 
 const currentPaper = computed(() => paperPresets.find((item) => item.id === selectedPaper.value) ?? paperPresets[0])
-const paperRatio = computed(() => currentPaper.value.widthMm / currentPaper.value.heightMm)
+const orientedPaper = computed(() => {
+  const paper = currentPaper.value
+  if (paperOrientation.value === 'portrait' && paper.widthMm > paper.heightMm) {
+    return { ...paper, widthMm: paper.heightMm, heightMm: paper.widthMm }
+  }
+  if (paperOrientation.value === 'landscape' && paper.widthMm < paper.heightMm) {
+    return { ...paper, widthMm: paper.heightMm, heightMm: paper.widthMm }
+  }
+  return paper
+})
+const paperRatio = computed(() => orientedPaper.value.widthMm / orientedPaper.value.heightMm)
 const currentQueueItem = computed(() => photoQueue.value[currentQueueIndex.value] ?? null)
 const queueLoadedCount = computed(() => photoQueue.value.filter((item) => item.outputPath).length)
 const exifEntries = computed(() => {
@@ -569,8 +585,8 @@ async function exportDataURL(targetImage = imageEl.value, watermarkText = waterm
   const img = targetImage
   if (!img) throw new Error('请先导入图片')
 
-  const exportWidth = Math.round(currentPaper.value.widthMm * 12)
-  const exportHeight = Math.round(currentPaper.value.heightMm * 12)
+  const exportWidth = Math.round(orientedPaper.value.widthMm * 12)
+  const exportHeight = Math.round(orientedPaper.value.heightMm * 12)
   const canvas = document.createElement('canvas')
   canvas.width = exportWidth
   canvas.height = exportHeight
@@ -627,12 +643,12 @@ async function saveImage() {
 async function printImage() {
   try {
     busy.value = true
-    status.value = '正在生成新图片并调起系统打印。'
+    status.value = '正在生成新图片并打开系统打印设置。'
     const dataURL = await exportDataURL()
-    const saved = await PhotoService.PrintRenderedImage(dataURL)
+    const saved = await PhotoService.PrintRenderedImage(dataURL, paperOrientation.value)
     if (!saved) throw new Error('打印服务未返回输出文件')
     lastExportPath.value = saved.path
-    status.value = `已发送打印任务，新图片保存在：${saved.path}`
+    status.value = `已处理打印请求，新图片保存在：${saved.path}`
   } catch (error) {
     status.value = errorMessage(error)
   } finally {
@@ -770,7 +786,7 @@ function errorMessage(error: unknown) {
   return String(error)
 }
 
-watch([selectedPaper, fitMode, () => watermark.text, () => watermark.color, () => watermark.shadowColor, () => watermark.fontSize, () => watermark.enabled], drawPreview)
+watch([selectedPaper, paperOrientation, fitMode, () => watermark.text, () => watermark.color, () => watermark.shadowColor, () => watermark.fontSize, () => watermark.enabled], drawPreview)
 watch([() => watermarkFields.time, () => watermarkFields.location, () => watermarkFields.gps, () => watermarkFields.camera], applySuggestedWatermark)
 watch(amapKey, (value) => localStorage.setItem('photomark2.amapKey', value))
 
@@ -992,6 +1008,18 @@ onBeforeUnmount(() => {
 
             <div class="grid grid-cols-2 border border-[#C8D0DA] bg-[#EEF2F6]">
               <button
+                v-for="orientation in paperOrientations"
+                :key="orientation.id"
+                class="h-9 text-sm font-semibold"
+                :class="paperOrientation === orientation.id ? 'bg-white text-ink' : 'text-[#617184] hover:text-[#2C3A48]'"
+                @click="paperOrientation = orientation.id"
+              >
+                {{ orientation.name }}
+              </button>
+            </div>
+
+            <div class="grid grid-cols-2 border border-[#C8D0DA] bg-[#EEF2F6]">
+              <button
                 v-for="mode in fitModes"
                 :key="mode.id"
                 class="h-9 text-sm font-semibold"
@@ -1003,7 +1031,7 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="border-y border-[#DDE2E8] bg-[#F3F5F8] p-3 text-sm leading-6 text-[#617184]">
-              当前输出：{{ currentPaper.name }}，比例 {{ paperRatio.toFixed(3) }}。预览虚线即最终相纸边界。
+              当前输出：{{ currentPaper.name }} {{ paperOrientation === 'landscape' ? '横向' : '纵向' }}，{{ orientedPaper.widthMm }} x {{ orientedPaper.heightMm }}mm，比例 {{ paperRatio.toFixed(3) }}。
             </div>
           </section>
 

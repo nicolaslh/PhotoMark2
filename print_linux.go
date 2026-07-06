@@ -7,7 +7,7 @@ import (
 	"os/exec"
 )
 
-func PrintImage(path string) error {
+func PrintImage(path string, orientation string) error {
 	if lpPath, err := exec.LookPath("lp"); err == nil {
 		cmd := exec.Command(lpPath, path)
 		if output, err := cmd.CombinedOutput(); err != nil {

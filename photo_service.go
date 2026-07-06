@@ -249,12 +249,12 @@ func amapStringField(raw json.RawMessage) string {
 	return ""
 }
 
-func (s *PhotoService) PrintRenderedImage(dataURL string) (*SavedImage, error) {
+func (s *PhotoService) PrintRenderedImage(dataURL string, orientation string) (*SavedImage, error) {
 	saved, err := s.SaveRenderedImage(dataURL)
 	if err != nil {
 		return nil, err
 	}
-	if err := PrintImage(saved.Path); err != nil {
+	if err := PrintImage(saved.Path, orientation); err != nil {
 		return saved, err
 	}
 	return saved, nil
