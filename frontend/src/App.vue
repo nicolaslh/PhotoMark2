@@ -38,6 +38,23 @@ type LoadedImage = {
   dataURL: string
 }
 
+type SavedImage = {
+  path: string
+  name: string
+  size: number
+}
+
+type PhotoQueueItem = {
+  id: string
+  name: string
+  path?: string
+  file?: File
+  info?: ImageInfo
+  address?: AmapAddress | null
+  outputPath?: string
+  error?: string
+}
+
 type AmapAddress = {
   formattedAddress: string
   province: string
@@ -77,6 +94,11 @@ const isDraggingWatermark = ref(false)
 const busy = ref(false)
 const status = ref('导入照片后，可拖动水印并直接打印新生成图片。')
 const lastExportPath = ref('')
+const photoQueue = ref<PhotoQueueItem[]>([])
+const currentQueueIndex = ref(-1)
+const batchBusy = ref(false)
+const batchCancelRequested = ref(false)
+const batchProgress = ref({ current: 0, total: 0 })
 const amapKey = ref('')
 const addressBusy = ref(false)
 const amapAddress = ref<AmapAddress | null>(null)
@@ -104,6 +126,8 @@ let drawMetrics: DrawMetrics | null = null
 
 const currentPaper = computed(() => paperPresets.find((item) => item.id === selectedPaper.value) ?? paperPresets[0])
 const paperRatio = computed(() => currentPaper.value.widthMm / currentPaper.value.heightMm)
+const currentQueueItem = computed(() => photoQueue.value[currentQueueIndex.value] ?? null)
+const queueLoadedCount = computed(() => photoQueue.value.filter((item) => item.outputPath).length)
 const exifEntries = computed(() => {
   if (!imageInfo.value?.exif) return []
   const entries = Object.entries(imageInfo.value.exif).filter(([, value]) => value)
@@ -142,7 +166,11 @@ const suggestedWatermark = computed(() => {
 })
 
 const gpsCoordinate = computed(() => {
-  const value = imageInfo.value?.exif?.['GPS 坐标']
+  return parseGPSCoordinate(imageInfo.value)
+})
+
+function parseGPSCoordinate(info: ImageInfo | null | undefined) {
+  const value = info?.exif?.['GPS 坐标']
   if (!value) return null
   const match = value.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/)
   if (!match) return null
@@ -150,22 +178,22 @@ const gpsCoordinate = computed(() => {
   const longitude = Number(match[2])
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
   return { latitude, longitude }
-})
+}
 
 async function triggerFilePicker() {
   try {
-    const path = await Dialogs.OpenFile({
+    const paths = await Dialogs.OpenFile({
       Title: '选择照片',
-      Message: '选择一张用于预览、加水印和打印的照片。',
+      Message: '选择一张或多张用于预览、加水印和批量处理的照片。',
       ButtonText: '选择',
       CanChooseFiles: true,
       CanChooseDirectories: false,
-      AllowsMultipleSelection: false,
+      AllowsMultipleSelection: true,
       Filters: [
         { DisplayName: '图片文件', Pattern: '*.jpg;*.jpeg;*.png;*.tif;*.tiff;*.bmp;*.webp' },
       ],
     })
-    if (path) await loadNativeImage(path)
+    if (paths.length) await addNativeImages(paths)
   } catch (error) {
     status.value = errorMessage(error)
   }
@@ -173,8 +201,8 @@ async function triggerFilePicker() {
 
 async function onFileInput(event: Event) {
   const target = event.target as HTMLInputElement
-  const file = target.files?.[0]
-  if (file) await loadBrowserFile(file)
+  const files = Array.from(target.files ?? [])
+  if (files.length) await addBrowserFiles(files)
   target.value = ''
 }
 
@@ -182,9 +210,57 @@ async function onDrop(event: DragEvent) {
   event.preventDefault()
   isDraggingFile.value = false
 
-  const files = event.dataTransfer?.files
-  if (!files?.length) return
-  await loadBrowserFile(files[0])
+  const files = Array.from(event.dataTransfer?.files ?? [])
+  if (!files.length) return
+  await addBrowserFiles(files)
+}
+
+async function addNativeImages(paths: string[]) {
+  const startIndex = photoQueue.value.length
+  paths.forEach((path) => {
+    photoQueue.value.push({ id: queueItemID(path), name: fileNameFromPath(path), path })
+  })
+  status.value = `已加入 ${paths.length} 张照片。`
+  if (startIndex >= 0) await selectQueueItem(startIndex)
+}
+
+async function addBrowserFiles(files: File[]) {
+  const imageFiles = files.filter((file) => file.type.startsWith('image/'))
+  if (!imageFiles.length) {
+    status.value = '请选择图片文件。'
+    return
+  }
+
+  const startIndex = photoQueue.value.length
+  imageFiles.forEach((file) => {
+    const path = browserFilePath(file)
+    photoQueue.value.push({ id: queueItemID(path || file.name), name: file.name, path: path || undefined, file })
+  })
+  status.value = `已加入 ${imageFiles.length} 张照片。`
+  await selectQueueItem(startIndex)
+}
+
+async function selectQueueItem(index: number) {
+  const item = photoQueue.value[index]
+  if (!item) return
+  currentQueueIndex.value = index
+  await loadQueueItem(item)
+}
+
+async function loadQueueItem(item: PhotoQueueItem) {
+  if (item.path) {
+    await loadNativeImage(item.path)
+    item.info = imageInfo.value ?? undefined
+    item.address = amapAddress.value
+    item.error = undefined
+    return
+  }
+
+  if (item.file) {
+    await loadBrowserFile(item.file)
+    item.info = imageInfo.value ?? undefined
+    item.address = amapAddress.value
+  }
 }
 
 async function loadBrowserFile(file: File) {
@@ -213,7 +289,7 @@ async function loadBrowserFile(file: File) {
     }
   }
 
-  amapAddress.value = null
+  amapAddress.value = currentQueueItem.value?.address ?? null
   applySuggestedWatermark()
   await nextTick()
   drawPreview()
@@ -226,7 +302,7 @@ async function loadNativeImage(path: string) {
     releaseImageURL()
     const loaded = (await PhotoService.LoadImage(path)) as LoadedImage
     imageInfo.value = loaded.info
-    amapAddress.value = null
+    amapAddress.value = currentQueueItem.value?.path === path ? currentQueueItem.value.address ?? null : null
     imageURL.value = loaded.dataURL
     imageEl.value = await loadImage(loaded.dataURL)
     status.value = `已读取 ${loaded.info.name} 的图片信息。`
@@ -254,6 +330,21 @@ function browserFilePath(file: File) {
   return candidate.path ?? ''
 }
 
+function queueItemID(seed: string) {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}-${seed}`
+}
+
+function fileNameFromPath(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path
+}
+
+function syncCurrentQueueMetadata() {
+  const item = currentQueueItem.value
+  if (!item) return
+  item.info = imageInfo.value ?? undefined
+  item.address = amapAddress.value
+}
+
 function applySuggestedWatermark() {
   watermark.text = selectedWatermarkText.value || imageInfo.value?.name || '相片打印助手'
 }
@@ -270,6 +361,7 @@ async function fetchAmapAddress() {
     status.value = '正在通过高德解析拍摄地址。'
     const address = (await PhotoService.ReverseGeocodeAmap(coordinate.latitude, coordinate.longitude, amapKey.value)) as AmapAddress
     amapAddress.value = address
+    syncCurrentQueueMetadata()
     if (watermarkFields.location) applySuggestedWatermark()
     status.value = `已获取地址：${address.formattedAddress}`
   } catch (error) {
@@ -473,8 +565,8 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
 
-async function exportDataURL() {
-  const img = imageEl.value
+async function exportDataURL(targetImage = imageEl.value, watermarkText = watermark.text) {
+  const img = targetImage
   if (!img) throw new Error('请先导入图片')
 
   const exportWidth = Math.round(currentPaper.value.widthMm * 12)
@@ -505,9 +597,12 @@ async function exportDataURL() {
   metrics.imageY = (exportHeight - metrics.imageH) / 2
 
   const originalFontSize = watermark.fontSize
+  const originalText = watermark.text
   watermark.fontSize = Math.round(originalFontSize * (exportWidth / (drawMetrics?.paperW || exportWidth)))
+  watermark.text = watermarkText
   renderToContext(ctx, metrics, img, false)
   watermark.fontSize = originalFontSize
+  watermark.text = originalText
 
   return canvas.toDataURL('image/png')
 }
@@ -520,6 +615,7 @@ async function saveImage() {
     const saved = await PhotoService.SaveRenderedImage(dataURL)
     if (!saved) throw new Error('保存合成图片失败')
     lastExportPath.value = saved.path
+    if (currentQueueItem.value) currentQueueItem.value.outputPath = saved.path
     status.value = `已保存到临时文件：${saved.path}`
   } catch (error) {
     status.value = errorMessage(error)
@@ -542,6 +638,111 @@ async function printImage() {
   } finally {
     busy.value = false
   }
+}
+
+async function processBatchImages() {
+  const pendingItems = photoQueue.value.filter((item) => !item.outputPath)
+  if (!pendingItems.length) {
+    status.value = photoQueue.value.length ? '队列里的图片都已处理完成。' : '请先导入图片。'
+    return
+  }
+
+  const originalIndex = currentQueueIndex.value
+  batchCancelRequested.value = false
+  batchBusy.value = true
+  batchProgress.value = { current: 0, total: pendingItems.length }
+  busy.value = true
+  let success = 0
+  let failed = 0
+
+  try {
+    for (let index = 0; index < pendingItems.length; index++) {
+      if (batchCancelRequested.value) break
+      const item = pendingItems[index]
+      batchProgress.value.current = index + 1
+      status.value = `正在批量处理 ${index + 1} / ${pendingItems.length}：${item.name}`
+
+      try {
+        const loaded = await loadItemForBatch(item)
+        const text = buildWatermarkText(loaded.info, item.address ?? null) || item.name
+        const dataURL = await exportDataURL(loaded.image, text)
+        const saved = (await PhotoService.SaveRenderedImage(dataURL)) as SavedImage
+        item.info = loaded.info
+        item.outputPath = saved.path
+        item.error = undefined
+        success += 1
+      } catch (error) {
+        item.error = errorMessage(error)
+        failed += 1
+      }
+    }
+
+    const remaining = photoQueue.value.filter((item) => !item.outputPath).length
+    status.value = batchCancelRequested.value
+      ? `批量处理已停止：本次成功 ${success} 张，失败 ${failed} 张，剩余 ${remaining} 张可继续。`
+      : `批量处理完成：本次成功 ${success} 张，失败 ${failed} 张，剩余 ${remaining} 张可继续。`
+  } finally {
+    batchBusy.value = false
+    batchCancelRequested.value = false
+    busy.value = false
+    if (originalIndex >= 0) await selectQueueItem(originalIndex)
+  }
+}
+
+function stopBatchProcessing() {
+  batchCancelRequested.value = true
+  status.value = '正在停止批量处理，当前图片完成后会暂停。'
+}
+
+async function loadItemForBatch(item: PhotoQueueItem) {
+  if (item.path) {
+    const loaded = (await PhotoService.LoadImage(item.path)) as LoadedImage
+    const image = await loadImage(loaded.dataURL)
+    let address = item.address ?? null
+    if (watermarkFields.location && amapKey.value && parseGPSCoordinate(loaded.info)) {
+      address = await loadAmapAddressForInfo(loaded.info, item.address ?? null)
+      item.address = address
+    }
+    return { info: loaded.info, image, address }
+  }
+
+  if (!item.file) throw new Error('图片来源不可用')
+  const url = URL.createObjectURL(item.file)
+  try {
+    const image = await loadImage(url)
+    const info = item.info ?? {
+      path: '',
+      name: item.file.name,
+      size: item.file.size,
+      mimeType: item.file.type,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      exif: {},
+    }
+    return { info, image, address: item.address ?? null }
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+async function loadAmapAddressForInfo(info: ImageInfo, cached: AmapAddress | null) {
+  if (cached) return cached
+  const coordinate = parseGPSCoordinate(info)
+  if (!coordinate) return null
+  try {
+    return (await PhotoService.ReverseGeocodeAmap(coordinate.latitude, coordinate.longitude, amapKey.value)) as AmapAddress
+  } catch {
+    return null
+  }
+}
+
+function buildWatermarkText(info: ImageInfo, address: AmapAddress | null) {
+  const pieces: string[] = []
+  if (watermarkFields.time) pieces.push(info.exif?.['拍摄时间'] || info.exif?.['修改时间'] || '')
+  if (watermarkFields.location) pieces.push(address?.formattedAddress || info.exif?.['GPS 坐标'] || '')
+  if (watermarkFields.gps) pieces.push(info.exif?.['GPS 坐标'] || '')
+  if (watermarkFields.camera) pieces.push([info.exif?.['相机品牌'], info.exif?.['相机型号']].filter(Boolean).join(' '))
+  return pieces.filter(Boolean).join('  |  ')
 }
 
 function updatePreviewSize() {
@@ -594,7 +795,7 @@ onBeforeUnmount(() => {
       </header>
 
       <section class="space-y-3 border-b border-[#D4DAE2] p-5">
-        <input ref="sourceInput" class="hidden" type="file" accept="image/*" @change="onFileInput" />
+        <input ref="sourceInput" class="hidden" type="file" accept="image/*" multiple @change="onFileInput" />
         <button class="h-10 w-full rounded-[3px] bg-[#17202A] px-4 text-sm font-semibold text-white transition hover:bg-[#243142]" @click="triggerFilePicker">
           选择图片
         </button>
@@ -607,6 +808,27 @@ onBeforeUnmount(() => {
           @drop="onDrop"
         >
           将图片拖入这里
+        </div>
+      </section>
+
+      <section v-if="photoQueue.length" class="border-b border-[#D4DAE2] p-5">
+        <div class="mb-3 flex items-center justify-between">
+          <h2 class="text-xs font-bold uppercase tracking-[0.08em] text-[#4C5A69]">图片队列</h2>
+          <span class="text-xs text-[#6B7788]">{{ queueLoadedCount }} / {{ photoQueue.length }} 已完成</span>
+        </div>
+        <div class="max-h-[210px] space-y-2 overflow-auto">
+          <button
+            v-for="(item, index) in photoQueue"
+            :key="item.id"
+            class="w-full border px-3 py-2 text-left text-sm transition"
+            :class="index === currentQueueIndex ? 'border-mint bg-[#ECF7F2]' : 'border-[#DDE2E8] bg-[#F3F5F8] hover:bg-[#EEF2F6]'"
+            @click="selectQueueItem(index)"
+          >
+            <div class="truncate font-semibold text-[#2C3A48]">{{ item.name }}</div>
+            <div class="mt-1 truncate text-xs" :class="item.error ? 'text-[#C85F45]' : item.outputPath ? 'text-[#2D7C5D]' : 'text-[#6B7788]'">
+              {{ item.error || item.outputPath || '待处理' }}
+            </div>
+          </button>
         </div>
       </section>
 
@@ -635,6 +857,12 @@ onBeforeUnmount(() => {
       <div class="flex h-14 shrink-0 items-center justify-between border-b border-[#D4DAE2] bg-[#F8FAFC] px-5">
         <div class="truncate pr-4 text-sm text-[#617184]">{{ status }}</div>
         <div class="flex items-center gap-2">
+          <button v-if="!batchBusy" class="h-9 rounded-[3px] border border-[#C8D0DA] bg-[#F8FAFC] px-4 text-sm font-semibold text-[#2C3A48] hover:bg-[#EEF2F6]" :disabled="!photoQueue.length" @click="processBatchImages">
+            批量处理
+          </button>
+          <button v-else class="h-9 rounded-[3px] border border-[#C8D0DA] bg-[#F8FAFC] px-4 text-sm font-semibold text-[#2C3A48] hover:bg-[#EEF2F6]" @click="stopBatchProcessing">
+            停止
+          </button>
           <button class="h-9 rounded-[3px] border border-[#C8D0DA] bg-[#F8FAFC] px-4 text-sm font-semibold text-[#2C3A48] hover:bg-[#EEF2F6]" :disabled="!imageEl || busy" @click="saveImage">
             保存新图片
           </button>
@@ -642,6 +870,9 @@ onBeforeUnmount(() => {
             确认打印
           </button>
         </div>
+      </div>
+      <div v-if="batchBusy" class="h-1 shrink-0 bg-[#DDE2E8]">
+        <div class="h-full bg-mint transition-all" :style="{ width: `${batchProgress.total ? (batchProgress.current / batchProgress.total) * 100 : 0}%` }" />
       </div>
 
       <div class="grid min-h-0 flex-1 grid-cols-[1fr_340px]">

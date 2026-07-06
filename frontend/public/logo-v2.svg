@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="PhotoMark2 logo">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="80" x2="864" y2="944" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#163653"/>
+      <stop offset="1" stop-color="#0B263E"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="280" y1="205" x2="760" y2="810" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EEF2F6"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="335" y1="292" x2="713" y2="715" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#DDE8F2"/>
+      <stop offset="1" stop-color="#8FA3B5"/>
+    </linearGradient>
+    <linearGradient id="mint" x1="290" y1="544" x2="790" y2="714" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A8D7C4"/>
+      <stop offset="1" stop-color="#55B88B"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="700" y1="548" x2="828" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF725E"/>
+      <stop offset="1" stop-color="#E85B45"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#061A2A" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect x="42" y="42" width="940" height="940" rx="178" fill="url(#bg)"/>
+
+  <g filter="url(#softShadow)">
+    <rect x="196" y="333" width="610" height="496" rx="26" transform="rotate(-8 501 581)" fill="#E9EEF3" opacity="0.84"/>
+    <rect x="228" y="277" width="610" height="496" rx="26" transform="rotate(-4 533 525)" fill="#F8FAFC" opacity="0.9"/>
+    <rect x="260" y="224" width="610" height="496" rx="26" transform="rotate(-2 565 472)" fill="url(#paper)"/>
+  </g>
+
+  <g transform="rotate(-2 565 472)">
+    <rect x="308" y="280" width="514" height="370" rx="10" fill="url(#sky)"/>
+    <circle cx="400" cy="357" r="30" fill="#FFFDF8"/>
+    <path d="M308 573 C365 528 382 507 420 536 C462 568 490 594 531 559 C577 519 626 506 678 543 C717 571 760 586 822 540 L822 650 L308 650 Z" fill="url(#mint)"/>
+    <path d="M308 626 C372 608 426 602 490 617 C563 635 629 649 702 624 C745 610 783 604 822 612 L822 650 L308 650 Z" fill="#0B263E"/>
+    <circle cx="565" cy="470" r="126" fill="none" stroke="#FFFFFF" stroke-width="17" opacity="0.96"/>
+    <path d="M565 344 L630 456 L565 597 M456 407 L586 407 L673 344 M441 503 L567 497 L675 597 M506 356 L566 470 L447 597 M675 344 L617 468 L692 468" fill="none" stroke="#FFFFFF" stroke-width="17" stroke-linecap="round" stroke-linejoin="round" opacity="0.96"/>
+  </g>
+
+  <path d="M759 552 C688 552 631 609 631 680 C631 776 759 906 759 906 C759 906 887 776 887 680 C887 609 830 552 759 552 Z" fill="#FFFFFF"/>
+  <path d="M759 581 C704 581 660 625 660 680 C660 754 759 858 759 858 C759 858 858 754 858 680 C858 625 814 581 759 581 Z" fill="url(#pin)"/>
+  <circle cx="759" cy="680" r="39" fill="#78C4A4"/>
+</svg>
