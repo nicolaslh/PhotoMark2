@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.0.1"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.0.1",
+			"CompanyName": "Nic",
+			"FileDescription": "跨平台相片预览、水印合成和打印输出工具",
+			"LegalCopyright": "(c) 2026, Nic",
+			"ProductName": "相片打印助手",
+			"Comments": "PhotoMark2 desktop photo print helper"
+		}
+	}
+}

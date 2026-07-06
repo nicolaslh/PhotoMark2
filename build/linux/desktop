@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=相片打印助手
+Comment=跨平台相片预览、水印合成和打印输出工具
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/PhotoMark2 %u
+Terminal=false
+Type=Application
+Icon=PhotoMark2
+Categories=Utility;
+StartupWMClass=PhotoMark2
+
+ 
