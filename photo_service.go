@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
 	"io"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -59,18 +62,25 @@ type amapRegeoResponse struct {
 	Regeocode struct {
 		FormattedAddress string `json:"formatted_address"`
 		AddressComponent struct {
-			Province     string          `json:"province"`
+			Province     json.RawMessage `json:"province"`
 			City         json.RawMessage `json:"city"`
-			District     string          `json:"district"`
-			Township     string          `json:"township"`
-			Adcode       string          `json:"adcode"`
-			Citycode     string          `json:"citycode"`
+			District     json.RawMessage `json:"district"`
+			Township     json.RawMessage `json:"township"`
+			Adcode       json.RawMessage `json:"adcode"`
+			Citycode     json.RawMessage `json:"citycode"`
 			StreetNumber struct {
-				Street string `json:"street"`
-				Number string `json:"number"`
+				Street json.RawMessage `json:"street"`
+				Number json.RawMessage `json:"number"`
 			} `json:"streetNumber"`
 		} `json:"addressComponent"`
 	} `json:"regeocode"`
+}
+
+type amapCoordinateConvertResponse struct {
+	Status    string `json:"status"`
+	Info      string `json:"info"`
+	Infocode  string `json:"infocode"`
+	Locations string `json:"locations"`
 }
 
 func (s *PhotoService) ServiceName() string {
@@ -91,15 +101,18 @@ func (s *PhotoService) ReadImage(path string) (*ImageInfo, error) {
 		return nil, errors.New("请选择图片文件，而不是文件夹")
 	}
 
-	width, height, err := imageDimensions(cleanPath)
+	imageConfig, imageFormat, err := imageMetadata(cleanPath)
 	if err != nil {
 		return nil, err
 	}
+	width := imageConfig.Width
+	height := imageConfig.Height
 
 	exif, err := ParseEXIF(cleanPath)
 	if err != nil {
 		exif = map[string]string{"解析状态": err.Error()}
 	}
+	addFileMetadata(exif, cleanPath, stat, imageConfig, imageFormat)
 
 	return &ImageInfo{
 		Path:     cleanPath,
@@ -138,9 +151,14 @@ func (s *PhotoService) ReverseGeocodeAmap(latitude float64, longitude float64, k
 		return nil, errors.New("GPS 坐标超出有效范围")
 	}
 
+	convertedLongitude, convertedLatitude, err := convertGPSCoordinateAmap(latitude, longitude, key)
+	if err != nil {
+		return nil, err
+	}
+
 	params := url.Values{}
 	params.Set("key", key)
-	params.Set("location", fmt.Sprintf("%.6f,%.6f", longitude, latitude))
+	params.Set("location", fmt.Sprintf("%.6f,%.6f", convertedLongitude, convertedLatitude))
 	params.Set("extensions", "base")
 	params.Set("radius", "1000")
 	params.Set("roadlevel", "0")
@@ -175,23 +193,85 @@ func (s *PhotoService) ReverseGeocodeAmap(latitude float64, longitude float64, k
 		}
 		return nil, fmt.Errorf("高德地址解析失败: %s (%s)", decoded.Info, decoded.Infocode)
 	}
-	if strings.TrimSpace(decoded.Regeocode.FormattedAddress) == "" {
+	component := decoded.Regeocode.AddressComponent
+	formattedAddress := strings.TrimSpace(decoded.Regeocode.FormattedAddress)
+	province := amapStringField(component.Province)
+	city := amapStringField(component.City)
+	district := amapStringField(component.District)
+	township := amapStringField(component.Township)
+	street := amapStringField(component.StreetNumber.Street)
+	number := amapStringField(component.StreetNumber.Number)
+	adcode := amapStringField(component.Adcode)
+	citycode := amapStringField(component.Citycode)
+	roughAddress := amapRoughAddress(formattedAddress, province, city, district, township, street)
+	if roughAddress == "" {
 		return nil, errors.New("高德未返回可用地址")
 	}
-
-	component := decoded.Regeocode.AddressComponent
 	return &AmapAddress{
-		FormattedAddress: decoded.Regeocode.FormattedAddress,
-		Province:         component.Province,
-		City:             amapStringField(component.City),
-		District:         component.District,
-		Township:         component.Township,
-		Street:           component.StreetNumber.Street,
-		Number:           component.StreetNumber.Number,
-		Adcode:           component.Adcode,
-		Citycode:         component.Citycode,
-		Location:         fmt.Sprintf("%.6f, %.6f", latitude, longitude),
+		FormattedAddress: roughAddress,
+		Province:         province,
+		City:             city,
+		District:         district,
+		Township:         township,
+		Street:           street,
+		Number:           number,
+		Adcode:           adcode,
+		Citycode:         citycode,
+		Location:         fmt.Sprintf("%.6f, %.6f", convertedLatitude, convertedLongitude),
 	}, nil
+}
+
+func convertGPSCoordinateAmap(latitude float64, longitude float64, key string) (float64, float64, error) {
+	params := url.Values{}
+	params.Set("key", key)
+	params.Set("locations", fmt.Sprintf("%.6f,%.6f", longitude, latitude))
+	params.Set("coordsys", "gps")
+	params.Set("output", "json")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	endpoint := "https://restapi.amap.com/v3/assistant/coordinate/convert?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, 0, fmt.Errorf("创建高德坐标转换请求失败: %w", err)
+	}
+	req.Header.Set("User-Agent", "PhotoMark2/0.0.1")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("请求高德坐标转换失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, 0, fmt.Errorf("高德坐标转换服务返回异常状态: %s", resp.Status)
+	}
+
+	var decoded amapCoordinateConvertResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return 0, 0, fmt.Errorf("解析高德坐标转换失败: %w", err)
+	}
+	if decoded.Status != "1" {
+		if decoded.Info == "" {
+			decoded.Info = "未知错误"
+		}
+		return 0, 0, fmt.Errorf("高德坐标转换失败: %s (%s)", decoded.Info, decoded.Infocode)
+	}
+
+	converted := strings.TrimSpace(strings.Split(decoded.Locations, ";")[0])
+	parts := strings.Split(converted, ",")
+	if len(parts) != 2 {
+		return 0, 0, errors.New("高德坐标转换未返回可用坐标")
+	}
+	convertedLongitude, err := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("解析高德经度失败: %w", err)
+	}
+	convertedLatitude, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("解析高德纬度失败: %w", err)
+	}
+	return convertedLongitude, convertedLatitude, nil
 }
 
 func (s *PhotoService) SaveRenderedImage(dataURL string) (*SavedImage, error) {
@@ -247,6 +327,44 @@ func amapStringField(raw json.RawMessage) string {
 		return strings.Join(list, "")
 	}
 	return ""
+}
+
+func amapRoughAddress(formattedAddress string, province string, city string, district string, township string, street string) string {
+	formattedAddress = strings.TrimSpace(formattedAddress)
+	province = strings.TrimSpace(province)
+	city = strings.TrimSpace(city)
+	district = strings.TrimSpace(district)
+	township = strings.TrimSpace(township)
+	street = strings.TrimSpace(street)
+	if province == "" {
+		return firstNonEmpty(joinAddressParts(city, district), joinAddressParts(district, township), city, district, township, street, formattedAddress)
+	}
+	major := city
+	if major == "" || major == province {
+		major = firstNonEmpty(district, township, street)
+	}
+	return firstNonEmpty(joinAddressParts(province, major), province, formattedAddress)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func joinAddressParts(values ...string) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			parts = append(parts, value)
+		}
+	}
+	return strings.Join(parts, "·")
 }
 
 func (s *PhotoService) PrintRenderedImage(dataURL string, orientation string) (*SavedImage, error) {
@@ -325,18 +443,106 @@ func imageMimeType(path string) string {
 	}
 }
 
-func imageDimensions(path string) (int, int, error) {
+func imageMetadata(path string) (image.Config, string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return 0, 0, fmt.Errorf("打开图片失败: %w", err)
+		return image.Config{}, "", fmt.Errorf("打开图片失败: %w", err)
 	}
 	defer file.Close()
 
-	cfg, _, err := decodeImageConfig(file)
+	cfg, format, err := decodeImageConfig(file)
 	if err != nil {
-		return 0, 0, fmt.Errorf("读取图片尺寸失败: %w", err)
+		return image.Config{}, "", fmt.Errorf("读取图片尺寸失败: %w", err)
 	}
-	return cfg.Width, cfg.Height, nil
+	return cfg, format, nil
+}
+
+func addFileMetadata(exif map[string]string, path string, stat os.FileInfo, cfg image.Config, format string) {
+	if exif == nil {
+		return
+	}
+	addString(exif, "文件名", filepath.Base(path))
+	addString(exif, "文件扩展名", strings.ToLower(filepath.Ext(path)))
+	addString(exif, "文件格式", format)
+	addString(exif, "MIME 类型", imageMimeType(path))
+	exif["文件大小"] = formatBytes(stat.Size())
+	exif["系统修改时间"] = stat.ModTime().Format("2006-01-02 15:04:05")
+	if cfg.Width > 0 && cfg.Height > 0 {
+		exif["图片尺寸"] = fmt.Sprintf("%d x %d px", cfg.Width, cfg.Height)
+		exif["像素总数"] = formatMegapixels(cfg.Width, cfg.Height)
+		exif["宽高比"] = aspectRatioLabel(cfg.Width, cfg.Height)
+	}
+	addString(exif, "颜色模型", colorModelLabel(cfg.ColorModel))
+}
+
+func formatBytes(size int64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	value := float64(size)
+	unit := 0
+	for value >= 1024 && unit < len(units)-1 {
+		value /= 1024
+		unit++
+	}
+	if unit == 0 {
+		return fmt.Sprintf("%d %s", size, units[unit])
+	}
+	return fmt.Sprintf("%.2f %s", value, units[unit])
+}
+
+func formatMegapixels(width int, height int) string {
+	pixels := float64(width*height) / 1000000
+	return fmt.Sprintf("%.2f MP", pixels)
+}
+
+func aspectRatioLabel(width int, height int) string {
+	divisor := gcd(width, height)
+	if divisor <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", width/divisor, height/divisor)
+}
+
+func gcd(a int, b int) int {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+func colorModelLabel(model color.Model) string {
+	switch model {
+	case color.RGBAModel:
+		return "RGBA"
+	case color.RGBA64Model:
+		return "RGBA64"
+	case color.NRGBAModel:
+		return "NRGBA"
+	case color.NRGBA64Model:
+		return "NRGBA64"
+	case color.AlphaModel:
+		return "Alpha"
+	case color.Alpha16Model:
+		return "Alpha16"
+	case color.GrayModel:
+		return "Gray"
+	case color.Gray16Model:
+		return "Gray16"
+	case color.CMYKModel:
+		return "CMYK"
+	case color.YCbCrModel:
+		return "YCbCr"
+	default:
+		if model == nil {
+			return ""
+		}
+		return fmt.Sprintf("%T", model)
+	}
 }
 
 func copyFile(dst, src string) error {

@@ -38,6 +38,8 @@ type WatermarkRenderOptions = {
   fontSize: number
 }
 
+type WatermarkAlign = CanvasTextAlign & ('left' | 'center' | 'right')
+
 type LoadedImage = {
   info: ImageInfo
   dataURL: string
@@ -91,6 +93,12 @@ const paperOrientations = [
   { id: 'portrait', name: '纵向' },
 ] as const
 
+const watermarkAlignments: { id: WatermarkAlign; name: string }[] = [
+  { id: 'left', name: '左对齐' },
+  { id: 'center', name: '居中' },
+  { id: 'right', name: '右对齐' },
+]
+
 const sourceInput = ref<HTMLInputElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const previewWrap = ref<HTMLElement | null>(null)
@@ -121,6 +129,7 @@ const watermark = reactive({
   color: '#ffffff',
   shadowColor: '#111827',
   fontSize: 32,
+  align: 'center' as WatermarkAlign,
   x: 0.72,
   y: 0.88,
 })
@@ -504,23 +513,30 @@ function drawWatermark(ctx: CanvasRenderingContext2D, metrics: DrawMetrics, opti
   const fontSize = options.fontSize
   const x = metrics.paperX + watermark.x * metrics.paperW
   const y = metrics.paperY + watermark.y * metrics.paperH
+  const maxWidth = metrics.paperW * 0.82
+  const drawX = watermark.align === 'left' ? x - maxWidth / 2 : watermark.align === 'right' ? x + maxWidth / 2 : x
 
   ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`
-  ctx.textAlign = 'center'
+  ctx.textAlign = watermark.align
   ctx.textBaseline = 'middle'
   ctx.shadowColor = watermark.shadowColor
   ctx.shadowBlur = Math.max(4, fontSize * 0.18)
   ctx.shadowOffsetY = Math.max(2, fontSize * 0.08)
   ctx.fillStyle = watermark.color
-  wrapWatermarkLines(ctx, options.text, metrics.paperW * 0.82).forEach((line, index, lines) => {
+  wrapWatermarkLines(ctx, options.text, maxWidth).forEach((line, index, lines) => {
     const lineY = y + (index - (lines.length - 1) / 2) * fontSize * 1.25
-    ctx.fillText(line, x, lineY)
+    ctx.fillText(line, drawX, lineY)
   })
   ctx.shadowBlur = 0
   ctx.shadowOffsetY = 0
 }
 
 function wrapWatermarkLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const lines = text.split(/\r?\n/).flatMap((line) => wrapWatermarkLine(ctx, line, maxWidth))
+  return lines.filter((line) => line.trim()).slice(0, 4)
+}
+
+function wrapWatermarkLine(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
   const parts = text.split(/\s+/).filter(Boolean)
   if (parts.length === 0) return ['']
   const lines: string[] = []
@@ -535,7 +551,7 @@ function wrapWatermarkLines(ctx: CanvasRenderingContext2D, text: string, maxWidt
     }
   }
   lines.push(line)
-  return lines.slice(0, 3)
+  return lines
 }
 
 function pointerInWatermark(event: PointerEvent) {
@@ -543,9 +559,13 @@ function pointerInWatermark(event: PointerEvent) {
   const point = eventToCanvasPoint(event)
   const textCenter = watermarkCenter(drawMetrics)
   const fontSize = watermark.fontSize
-  const width = Math.min(drawMetrics.paperW * 0.86, Math.max(180, watermark.text.length * fontSize * 0.32))
-  const height = fontSize * 2.4
+  const width = Math.min(drawMetrics.paperW * 0.86, Math.max(180, longestWatermarkLineLength() * fontSize * 0.32))
+  const height = fontSize * Math.max(2.4, watermark.text.split(/\r?\n/).filter((line) => line.trim()).length * 1.35)
   return Math.abs(point.x - textCenter.x) <= width / 2 && Math.abs(point.y - textCenter.y) <= height / 2
+}
+
+function longestWatermarkLineLength() {
+  return watermark.text.split(/\r?\n/).reduce((longest, line) => Math.max(longest, line.trim().length), 0)
 }
 
 function watermarkCenter(metrics: DrawMetrics) {
@@ -798,7 +818,7 @@ function errorMessage(error: unknown) {
   return String(error)
 }
 
-watch([selectedPaper, paperOrientation, fitMode, () => watermark.text, () => watermark.color, () => watermark.shadowColor, () => watermark.fontSize, () => watermark.enabled], drawPreview)
+watch([selectedPaper, paperOrientation, fitMode, () => watermark.text, () => watermark.color, () => watermark.shadowColor, () => watermark.fontSize, () => watermark.align, () => watermark.enabled], drawPreview)
 watch([() => watermarkFields.time, () => watermarkFields.location, () => watermarkFields.gps, () => watermarkFields.camera], applySuggestedWatermark)
 watch(amapKey, (value) => localStorage.setItem('photomark2.amapKey', value))
 
@@ -1005,6 +1025,18 @@ onBeforeUnmount(() => {
               </div>
               <input v-model.number="watermark.fontSize" min="14" max="88" type="range" class="mt-2 w-full accent-mint" />
             </label>
+
+            <div class="grid grid-cols-3 border border-[#C8D0DA] bg-[#EEF2F6]">
+              <button
+                v-for="alignment in watermarkAlignments"
+                :key="alignment.id"
+                class="h-9 text-sm font-semibold"
+                :class="watermark.align === alignment.id ? 'bg-white text-ink' : 'text-[#617184] hover:text-[#2C3A48]'"
+                @click="watermark.align = alignment.id"
+              >
+                {{ alignment.name }}
+              </button>
+            </div>
           </section>
 
           <section class="mt-6 space-y-4">
