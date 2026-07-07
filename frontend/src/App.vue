@@ -33,6 +33,11 @@ type DrawMetrics = {
   imageH: number
 }
 
+type WatermarkRenderOptions = {
+  text: string
+  fontSize: number
+}
+
 type LoadedImage = {
   info: ImageInfo
   dataURL: string
@@ -457,7 +462,13 @@ function calculateMetrics(maxWidth: number, maxHeight: number): DrawMetrics {
   }
 }
 
-function renderToContext(ctx: CanvasRenderingContext2D, metrics: DrawMetrics, img: HTMLImageElement, showGuides: boolean) {
+function renderToContext(
+  ctx: CanvasRenderingContext2D,
+  metrics: DrawMetrics,
+  img: HTMLImageElement,
+  showGuides: boolean,
+  watermarkOptions: WatermarkRenderOptions = { text: watermark.text, fontSize: watermark.fontSize },
+) {
   ctx.clearRect(0, 0, metrics.canvasWidth, metrics.canvasHeight)
 
   ctx.fillStyle = '#E1E5EA'
@@ -473,7 +484,7 @@ function renderToContext(ctx: CanvasRenderingContext2D, metrics: DrawMetrics, im
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(metrics.paperX, metrics.paperY, metrics.paperW, metrics.paperH)
   ctx.drawImage(img, metrics.imageX, metrics.imageY, metrics.imageW, metrics.imageH)
-  drawWatermark(ctx, metrics)
+  drawWatermark(ctx, metrics, watermarkOptions)
   ctx.restore()
 
   if (showGuides) {
@@ -487,10 +498,10 @@ function renderToContext(ctx: CanvasRenderingContext2D, metrics: DrawMetrics, im
   }
 }
 
-function drawWatermark(ctx: CanvasRenderingContext2D, metrics: DrawMetrics) {
-  if (!watermark.enabled || !watermark.text.trim()) return
+function drawWatermark(ctx: CanvasRenderingContext2D, metrics: DrawMetrics, options: WatermarkRenderOptions) {
+  if (!watermark.enabled || !options.text.trim()) return
 
-  const fontSize = watermark.fontSize
+  const fontSize = options.fontSize
   const x = metrics.paperX + watermark.x * metrics.paperW
   const y = metrics.paperY + watermark.y * metrics.paperH
 
@@ -501,7 +512,7 @@ function drawWatermark(ctx: CanvasRenderingContext2D, metrics: DrawMetrics) {
   ctx.shadowBlur = Math.max(4, fontSize * 0.18)
   ctx.shadowOffsetY = Math.max(2, fontSize * 0.08)
   ctx.fillStyle = watermark.color
-  wrapWatermarkLines(ctx, watermark.text, metrics.paperW * 0.82).forEach((line, index, lines) => {
+  wrapWatermarkLines(ctx, options.text, metrics.paperW * 0.82).forEach((line, index, lines) => {
     const lineY = y + (index - (lines.length - 1) / 2) * fontSize * 1.25
     ctx.fillText(line, x, lineY)
   })
@@ -612,13 +623,10 @@ async function exportDataURL(targetImage = imageEl.value, watermarkText = waterm
   metrics.imageX = (exportWidth - metrics.imageW) / 2
   metrics.imageY = (exportHeight - metrics.imageH) / 2
 
-  const originalFontSize = watermark.fontSize
-  const originalText = watermark.text
-  watermark.fontSize = Math.round(originalFontSize * (exportWidth / (drawMetrics?.paperW || exportWidth)))
-  watermark.text = watermarkText
-  renderToContext(ctx, metrics, img, false)
-  watermark.fontSize = originalFontSize
-  watermark.text = originalText
+  renderToContext(ctx, metrics, img, false, {
+    text: watermarkText,
+    fontSize: Math.round(watermark.fontSize * (exportWidth / (drawMetrics?.paperW || exportWidth))),
+  })
 
   return canvas.toDataURL('image/png')
 }
@@ -637,6 +645,8 @@ async function saveImage() {
     status.value = errorMessage(error)
   } finally {
     busy.value = false
+    await nextTick()
+    drawPreview()
   }
 }
 
@@ -653,6 +663,8 @@ async function printImage() {
     status.value = errorMessage(error)
   } finally {
     busy.value = false
+    await nextTick()
+    drawPreview()
   }
 }
 
@@ -870,9 +882,9 @@ onBeforeUnmount(() => {
     </aside>
 
     <section class="flex min-w-0 flex-1 flex-col">
-      <div class="flex h-14 shrink-0 items-center justify-between border-b border-[#D4DAE2] bg-[#F8FAFC] px-5">
-        <div class="truncate pr-4 text-sm text-[#617184]">{{ status }}</div>
-        <div class="flex items-center gap-2">
+      <div class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[#D4DAE2] bg-[#F8FAFC] px-5">
+        <div class="min-w-0 flex-1 truncate text-sm text-[#617184]">{{ status }}</div>
+        <div class="flex shrink-0 items-center gap-2">
           <button v-if="!batchBusy" class="h-9 rounded-[3px] border border-[#C8D0DA] bg-[#F8FAFC] px-4 text-sm font-semibold text-[#2C3A48] hover:bg-[#EEF2F6]" :disabled="!photoQueue.length" @click="processBatchImages">
             批量处理
           </button>
@@ -1035,7 +1047,7 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
-          <section v-if="lastExportPath" class="mt-6 border-y border-[#B8D8C9] bg-[#ECF7F2] p-3 text-sm leading-6 text-[#2D7C5D]">
+          <section v-if="lastExportPath" class="mt-6 break-all border-y border-[#B8D8C9] bg-[#ECF7F2] p-3 text-sm leading-6 text-[#2D7C5D]">
             最新生成文件：{{ lastExportPath }}
           </section>
         </aside>
