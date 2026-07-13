@@ -39,6 +39,7 @@ type WatermarkRenderOptions = {
 }
 
 type WatermarkAlign = CanvasTextAlign & ('left' | 'center' | 'right')
+type RotationDegrees = 0 | 90 | 180 | 270
 
 type LoadedImage = {
   info: ImageInfo
@@ -58,6 +59,7 @@ type PhotoQueueItem = {
   file?: File
   info?: ImageInfo
   address?: AmapAddress | null
+  rotation?: RotationDegrees
   outputPath?: string
   error?: string
 }
@@ -108,6 +110,7 @@ const imageInfo = ref<ImageInfo | null>(null)
 const selectedPaper = ref('6in')
 const paperOrientation = ref<(typeof paperOrientations)[number]['id']>('landscape')
 const fitMode = ref<(typeof fitModes)[number]['id']>('contain')
+const rotation = ref<RotationDegrees>(0)
 const isDraggingFile = ref(false)
 const isDraggingWatermark = ref(false)
 const busy = ref(false)
@@ -274,6 +277,7 @@ async function selectQueueItem(index: number) {
   const item = photoQueue.value[index]
   if (!item) return
   currentQueueIndex.value = index
+  rotation.value = item.rotation ?? 0
   await loadQueueItem(item)
 }
 
@@ -379,6 +383,34 @@ function applySuggestedWatermark() {
   watermark.text = selectedWatermarkText.value || imageInfo.value?.name || '相片打印助手'
 }
 
+function rotatePhoto(delta: -90 | 90) {
+  if (!imageEl.value) return
+  rotation.value = normalizeRotation(rotation.value + delta)
+  const item = currentQueueItem.value
+  if (item) {
+    item.rotation = rotation.value
+    item.outputPath = undefined
+    item.error = undefined
+  }
+  status.value = `照片已旋转至 ${rotation.value}°，保存或打印时会应用该角度。`
+}
+
+function resetRotation() {
+  if (!imageEl.value || rotation.value === 0) return
+  rotation.value = 0
+  const item = currentQueueItem.value
+  if (item) {
+    item.rotation = 0
+    item.outputPath = undefined
+    item.error = undefined
+  }
+  status.value = '照片旋转已复位。'
+}
+
+function normalizeRotation(value: number): RotationDegrees {
+  return ((value % 360) + 360) % 360 as RotationDegrees
+}
+
 async function fetchAmapAddress() {
   const coordinate = gpsCoordinate.value
   if (!coordinate) {
@@ -450,10 +482,11 @@ function calculateMetrics(maxWidth: number, maxHeight: number): DrawMetrics {
   const paperX = (canvasWidth - paperW) / 2
   const paperY = (canvasHeight - paperH) / 2
   const img = imageEl.value
-  const imageRatio = img ? img.naturalWidth / img.naturalHeight : ratio
-  const scale = fitMode.value === 'cover' ? Math.max(paperW / (img?.naturalWidth || paperW), paperH / (img?.naturalHeight || paperH)) : Math.min(paperW / (img?.naturalWidth || paperW), paperH / (img?.naturalHeight || paperH))
-  const imageW = img ? img.naturalWidth * scale : paperW
-  const imageH = img ? img.naturalHeight * scale : paperH
+  const sourceSize = img ? rotatedImageSize(img, rotation.value) : { width: paperW, height: paperH }
+  const imageRatio = sourceSize.width / sourceSize.height
+  const scale = fitMode.value === 'cover' ? Math.max(paperW / sourceSize.width, paperH / sourceSize.height) : Math.min(paperW / sourceSize.width, paperH / sourceSize.height)
+  const imageW = img ? sourceSize.width * scale : paperW
+  const imageH = img ? sourceSize.height * scale : paperH
   const fallbackW = imageRatio >= ratio ? paperW : paperH * imageRatio
   const fallbackH = imageRatio >= ratio ? paperW / imageRatio : paperH
 
@@ -477,6 +510,7 @@ function renderToContext(
   img: HTMLImageElement,
   showGuides: boolean,
   watermarkOptions: WatermarkRenderOptions = { text: watermark.text, fontSize: watermark.fontSize },
+  rotationDegrees: RotationDegrees = rotation.value,
 ) {
   ctx.clearRect(0, 0, metrics.canvasWidth, metrics.canvasHeight)
 
@@ -492,7 +526,7 @@ function renderToContext(
   ctx.clip()
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(metrics.paperX, metrics.paperY, metrics.paperW, metrics.paperH)
-  ctx.drawImage(img, metrics.imageX, metrics.imageY, metrics.imageW, metrics.imageH)
+  drawRotatedImage(ctx, img, metrics.imageX, metrics.imageY, metrics.imageW, metrics.imageH, rotationDegrees)
   drawWatermark(ctx, metrics, watermarkOptions)
   ctx.restore()
 
@@ -505,6 +539,33 @@ function renderToContext(
     ctx.strokeRect(metrics.paperX + 8.5, metrics.paperY + 8.5, metrics.paperW - 17, metrics.paperH - 17)
     ctx.setLineDash([])
   }
+}
+
+function rotatedImageSize(img: HTMLImageElement, rotationDegrees: RotationDegrees) {
+  const swapsAxes = rotationDegrees === 90 || rotationDegrees === 270
+  return {
+    width: swapsAxes ? img.naturalHeight : img.naturalWidth,
+    height: swapsAxes ? img.naturalWidth : img.naturalHeight,
+  }
+}
+
+function drawRotatedImage(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  rotationDegrees: RotationDegrees,
+) {
+  const swapsAxes = rotationDegrees === 90 || rotationDegrees === 270
+  const drawWidth = swapsAxes ? height : width
+  const drawHeight = swapsAxes ? width : height
+  ctx.save()
+  ctx.translate(x + width / 2, y + height / 2)
+  ctx.rotate((rotationDegrees * Math.PI) / 180)
+  ctx.drawImage(img, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight)
+  ctx.restore()
 }
 
 function drawWatermark(ctx: CanvasRenderingContext2D, metrics: DrawMetrics, options: WatermarkRenderOptions) {
@@ -612,7 +673,11 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
 
-async function exportDataURL(targetImage = imageEl.value, watermarkText = watermark.text) {
+async function exportDataURL(
+  targetImage = imageEl.value,
+  watermarkText = watermark.text,
+  rotationDegrees: RotationDegrees = rotation.value,
+) {
   const img = targetImage
   if (!img) throw new Error('请先导入图片')
 
@@ -637,16 +702,17 @@ async function exportDataURL(targetImage = imageEl.value, watermarkText = waterm
     imageH: exportHeight,
   }
 
-  const scale = fitMode.value === 'cover' ? Math.max(exportWidth / img.naturalWidth, exportHeight / img.naturalHeight) : Math.min(exportWidth / img.naturalWidth, exportHeight / img.naturalHeight)
-  metrics.imageW = img.naturalWidth * scale
-  metrics.imageH = img.naturalHeight * scale
+  const sourceSize = rotatedImageSize(img, rotationDegrees)
+  const scale = fitMode.value === 'cover' ? Math.max(exportWidth / sourceSize.width, exportHeight / sourceSize.height) : Math.min(exportWidth / sourceSize.width, exportHeight / sourceSize.height)
+  metrics.imageW = sourceSize.width * scale
+  metrics.imageH = sourceSize.height * scale
   metrics.imageX = (exportWidth - metrics.imageW) / 2
   metrics.imageY = (exportHeight - metrics.imageH) / 2
 
   renderToContext(ctx, metrics, img, false, {
     text: watermarkText,
     fontSize: Math.round(watermark.fontSize * (exportWidth / (drawMetrics?.paperW || exportWidth))),
-  })
+  }, rotationDegrees)
 
   return canvas.toDataURL('image/png')
 }
@@ -713,7 +779,7 @@ async function processBatchImages() {
       try {
         const loaded = await loadItemForBatch(item)
         const text = buildWatermarkText(loaded.info, item.address ?? null) || item.name
-        const dataURL = await exportDataURL(loaded.image, text)
+        const dataURL = await exportDataURL(loaded.image, text, item.rotation ?? 0)
         const saved = (await PhotoService.SaveRenderedImage(dataURL)) as SavedImage
         item.info = loaded.info
         item.outputPath = saved.path
@@ -818,7 +884,7 @@ function errorMessage(error: unknown) {
   return String(error)
 }
 
-watch([selectedPaper, paperOrientation, fitMode, () => watermark.text, () => watermark.color, () => watermark.shadowColor, () => watermark.fontSize, () => watermark.align, () => watermark.enabled], drawPreview)
+watch([selectedPaper, paperOrientation, fitMode, rotation, () => watermark.text, () => watermark.color, () => watermark.shadowColor, () => watermark.fontSize, () => watermark.align, () => watermark.enabled], drawPreview)
 watch([() => watermarkFields.time, () => watermarkFields.location, () => watermarkFields.gps, () => watermarkFields.camera], applySuggestedWatermark)
 watch(amapKey, (value) => localStorage.setItem('photomark2.amapKey', value))
 
@@ -1041,6 +1107,23 @@ onBeforeUnmount(() => {
 
           <section class="mt-6 space-y-4">
             <h2 class="text-xs font-bold uppercase tracking-[0.08em] text-[#4C5A69]">相纸适配</h2>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-sm font-medium text-[#2C3A48]">照片旋转</span>
+                <span class="text-xs text-[#6B7788]">当前 {{ rotation }}°</span>
+              </div>
+              <div class="grid grid-cols-3 border border-[#C8D0DA] bg-[#EEF2F6]">
+                <button class="h-9 text-sm font-semibold text-[#2C3A48] hover:bg-white disabled:opacity-55" :disabled="!imageEl || busy" title="向左旋转 90 度" @click="rotatePhoto(-90)">
+                  ↶ 左转
+                </button>
+                <button class="h-9 border-x border-[#C8D0DA] text-sm font-semibold text-[#2C3A48] hover:bg-white disabled:opacity-55" :disabled="!imageEl || busy || rotation === 0" title="恢复原始方向" @click="resetRotation">
+                  复位
+                </button>
+                <button class="h-9 text-sm font-semibold text-[#2C3A48] hover:bg-white disabled:opacity-55" :disabled="!imageEl || busy" title="向右旋转 90 度" @click="rotatePhoto(90)">
+                  右转 ↷
+                </button>
+              </div>
+            </div>
             <label class="block text-sm">
               <span class="font-medium text-[#2C3A48]">相纸尺寸</span>
               <select v-model="selectedPaper" class="mt-2 h-10 w-full rounded-[3px] border border-[#C8D0DA] bg-white px-3 text-sm outline-none focus:border-mint">
