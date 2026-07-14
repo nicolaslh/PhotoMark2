@@ -62,6 +62,76 @@ export class AmapAddress {
     }
 }
 
+export class AutoColorReport {
+    "redGain": number;
+    "greenGain": number;
+    "blueGain": number;
+    "blackPoint": number;
+    "whitePoint": number;
+
+    /** Creates a new AutoColorReport instance. */
+    constructor($$source: Partial<AutoColorReport> = {}) {
+        if (!("redGain" in $$source)) {
+            this["redGain"] = 0;
+        }
+        if (!("greenGain" in $$source)) {
+            this["greenGain"] = 0;
+        }
+        if (!("blueGain" in $$source)) {
+            this["blueGain"] = 0;
+        }
+        if (!("blackPoint" in $$source)) {
+            this["blackPoint"] = 0;
+        }
+        if (!("whitePoint" in $$source)) {
+            this["whitePoint"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AutoColorReport instance from a string or object.
+     */
+    static createFrom($$source: any = {}): AutoColorReport {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new AutoColorReport($$parsedSource as Partial<AutoColorReport>);
+    }
+}
+
+export class AutoColorResult {
+    "path": string;
+    "dataURL": string;
+    "report": AutoColorReport;
+
+    /** Creates a new AutoColorResult instance. */
+    constructor($$source: Partial<AutoColorResult> = {}) {
+        if (!("path" in $$source)) {
+            this["path"] = "";
+        }
+        if (!("dataURL" in $$source)) {
+            this["dataURL"] = "";
+        }
+        if (!("report" in $$source)) {
+            this["report"] = (new AutoColorReport());
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AutoColorResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): AutoColorResult {
+        const $$createField2_0 = $$createType0;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("report" in $$parsedSource) {
+            $$parsedSource["report"] = $$createField2_0($$parsedSource["report"]);
+        }
+        return new AutoColorResult($$parsedSource as Partial<AutoColorResult>);
+    }
+}
+
 export class ImageInfo {
     "path": string;
     "name": string;
@@ -102,7 +172,7 @@ export class ImageInfo {
      * Creates a new ImageInfo instance from a string or object.
      */
     static createFrom($$source: any = {}): ImageInfo {
-        const $$createField6_0 = $$createType0;
+        const $$createField6_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("exif" in $$parsedSource) {
             $$parsedSource["exif"] = $$createField6_0($$parsedSource["exif"]);
@@ -131,7 +201,7 @@ export class LoadedImage {
      * Creates a new LoadedImage instance from a string or object.
      */
     static createFrom($$source: any = {}): LoadedImage {
-        const $$createField0_0 = $$createType2;
+        const $$createField0_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("info" in $$parsedSource) {
             $$parsedSource["info"] = $$createField0_0($$parsedSource["info"]);
@@ -170,6 +240,7 @@ export class SavedImage {
 }
 
 // Private type creation functions
-const $$createType0 = $Create.Map($Create.Any, $Create.Any);
-const $$createType1 = ImageInfo.createFrom;
-const $$createType2 = $Create.Nullable($$createType1);
+const $$createType0 = AutoColorReport.createFrom;
+const $$createType1 = $Create.Map($Create.Any, $Create.Any);
+const $$createType2 = ImageInfo.createFrom;
+const $$createType3 = $Create.Nullable($$createType2);

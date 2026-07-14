@@ -2,7 +2,10 @@ module photomark2
 
 go 1.25.0
 
-require github.com/wailsapp/wails/v3 v3.0.0-alpha.96
+require (
+	github.com/nicolaslh/autocolor-go v0.0.0-20260714015417-a098278280f4
+	github.com/wailsapp/wails/v3 v3.0.0-alpha.96
+)
 
 require (
 	golang.org/x/image v0.40.0

@@ -52,6 +52,20 @@ type SavedImage = {
   size: number
 }
 
+type AutoColorReport = {
+  redGain: number
+  greenGain: number
+  blueGain: number
+  blackPoint: number
+  whitePoint: number
+}
+
+type AutoColorResult = {
+  path: string
+  dataURL: string
+  report: AutoColorReport
+}
+
 type PhotoQueueItem = {
   id: string
   name: string
@@ -60,6 +74,9 @@ type PhotoQueueItem = {
   info?: ImageInfo
   address?: AmapAddress | null
   rotation?: RotationDegrees
+  autoColorEnabled?: boolean
+  autoColorPath?: string
+  autoColorReport?: AutoColorReport
   outputPath?: string
   error?: string
 }
@@ -160,6 +177,7 @@ const orientedPaper = computed(() => {
 })
 const paperRatio = computed(() => orientedPaper.value.widthMm / orientedPaper.value.heightMm)
 const currentQueueItem = computed(() => photoQueue.value[currentQueueIndex.value] ?? null)
+const autoColorEnabled = computed(() => currentQueueItem.value?.autoColorEnabled === true)
 const queueLoadedCount = computed(() => photoQueue.value.filter((item) => item.outputPath).length)
 const exifEntries = computed(() => {
   if (!imageInfo.value?.exif) return []
@@ -284,6 +302,7 @@ async function selectQueueItem(index: number) {
 async function loadQueueItem(item: PhotoQueueItem) {
   if (item.path) {
     await loadNativeImage(item.path)
+    if (item.autoColorEnabled && item.autoColorPath) await loadCachedAutoColor(item)
     item.info = imageInfo.value ?? undefined
     item.address = amapAddress.value
     item.error = undefined
@@ -292,6 +311,7 @@ async function loadQueueItem(item: PhotoQueueItem) {
 
   if (item.file) {
     await loadBrowserFile(item.file)
+    if (item.autoColorEnabled && item.autoColorPath) await loadCachedAutoColor(item)
     item.info = imageInfo.value ?? undefined
     item.address = amapAddress.value
   }
@@ -350,6 +370,21 @@ async function loadNativeImage(path: string) {
   }
 }
 
+async function loadCachedAutoColor(item: PhotoQueueItem) {
+  if (!item.autoColorPath) return
+  const loaded = (await PhotoService.LoadImage(item.autoColorPath)) as LoadedImage
+  await displayImageDataURL(loaded.dataURL)
+  status.value = `已加载 ${item.name} 的调色版本。${formatAutoColorReport(item.autoColorReport)}`
+}
+
+async function displayImageDataURL(dataURL: string) {
+  releaseImageURL()
+  imageURL.value = dataURL
+  imageEl.value = await loadImage(dataURL)
+  await nextTick()
+  drawPreview()
+}
+
 async function loadMetadata(path: string) {
   try {
     imageInfo.value = (await PhotoService.ReadImage(path)) as ImageInfo
@@ -381,6 +416,60 @@ function syncCurrentQueueMetadata() {
 
 function applySuggestedWatermark() {
   watermark.text = selectedWatermarkText.value || imageInfo.value?.name || '相片打印助手'
+}
+
+async function toggleAutoColor() {
+  const item = currentQueueItem.value
+  if (!item || !imageEl.value) return
+
+  try {
+    busy.value = true
+    item.outputPath = undefined
+    item.error = undefined
+
+    if (item.autoColorEnabled) {
+      item.autoColorEnabled = false
+      status.value = `正在恢复 ${item.name} 的原图。`
+      await loadQueueItem(item)
+      status.value = `已恢复 ${item.name} 的原图。`
+      return
+    }
+
+    status.value = `正在为 ${item.name} 一键调色。`
+    if (!item.autoColorPath) {
+      const source = item.path || (item.file ? await fileToDataURL(item.file) : '')
+      if (!source) throw new Error('当前图片来源不可用')
+      const result = (await PhotoService.AutoColorImage(source)) as AutoColorResult | null
+      if (!result) throw new Error('一键调色服务未返回结果')
+      item.autoColorPath = result.path
+      item.autoColorReport = result.report
+      await displayImageDataURL(result.dataURL)
+    } else {
+      await loadCachedAutoColor(item)
+    }
+    item.autoColorEnabled = true
+    status.value = `已完成 ${item.name} 的一键调色。${formatAutoColorReport(item.autoColorReport)}`
+  } catch (error) {
+    item.autoColorEnabled = false
+    item.error = errorMessage(error)
+    status.value = item.error
+  } finally {
+    busy.value = false
+  }
+}
+
+function fileToDataURL(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('读取图片内容失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function formatAutoColorReport(report?: AutoColorReport) {
+  if (!report) return ''
+  return ` 白平衡 R/G/B ${report.redGain.toFixed(2)}/${report.greenGain.toFixed(2)}/${report.blueGain.toFixed(2)}。`
 }
 
 function rotatePhoto(delta: -90 | 90) {
@@ -810,17 +899,35 @@ function stopBatchProcessing() {
 
 async function loadItemForBatch(item: PhotoQueueItem) {
   if (item.path) {
-    const loaded = (await PhotoService.LoadImage(item.path)) as LoadedImage
+    const sourcePath = item.autoColorEnabled && item.autoColorPath ? item.autoColorPath : item.path
+    const loaded = (await PhotoService.LoadImage(sourcePath)) as LoadedImage
+    const info = item.info ?? (sourcePath === item.path
+      ? loaded.info
+      : (await PhotoService.ReadImage(item.path)) as ImageInfo)
     const image = await loadImage(loaded.dataURL)
     let address = item.address ?? null
-    if (watermarkFields.location && amapKey.value && parseGPSCoordinate(loaded.info)) {
-      address = await loadAmapAddressForInfo(loaded.info, item.address ?? null)
+    if (watermarkFields.location && amapKey.value && parseGPSCoordinate(info)) {
+      address = await loadAmapAddressForInfo(info, item.address ?? null)
       item.address = address
     }
-    return { info: loaded.info, image, address }
+    return { info, image, address }
   }
 
   if (!item.file) throw new Error('图片来源不可用')
+  if (item.autoColorEnabled && item.autoColorPath) {
+    const loaded = (await PhotoService.LoadImage(item.autoColorPath)) as LoadedImage
+    const image = await loadImage(loaded.dataURL)
+    const info = item.info ?? {
+      path: '',
+      name: item.file.name,
+      size: item.file.size,
+      mimeType: item.file.type,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      exif: {},
+    }
+    return { info, image, address: item.address ?? null }
+  }
   const url = URL.createObjectURL(item.file)
   try {
     const image = await loadImage(url)
@@ -936,11 +1043,12 @@ onBeforeUnmount(() => {
             :key="item.id"
             class="w-full border px-3 py-2 text-left text-sm transition"
             :class="index === currentQueueIndex ? 'border-mint bg-[#ECF7F2]' : 'border-[#DDE2E8] bg-[#F3F5F8] hover:bg-[#EEF2F6]'"
+            :disabled="busy"
             @click="selectQueueItem(index)"
           >
             <div class="truncate font-semibold text-[#2C3A48]">{{ item.name }}</div>
             <div class="mt-1 truncate text-xs" :class="item.error ? 'text-[#C85F45]' : item.outputPath ? 'text-[#2D7C5D]' : 'text-[#6B7788]'">
-              {{ item.error || item.outputPath || '待处理' }}
+              {{ item.error || item.outputPath || (item.autoColorEnabled ? '已调色 · 待处理' : '待处理') }}
             </div>
           </button>
         </div>
@@ -971,6 +1079,15 @@ onBeforeUnmount(() => {
       <div class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[#D4DAE2] bg-[#F8FAFC] px-5">
         <div class="min-w-0 flex-1 truncate text-sm text-[#617184]">{{ status }}</div>
         <div class="flex shrink-0 items-center gap-2">
+          <button
+            class="h-9 rounded-[3px] border px-4 text-sm font-semibold transition"
+            :class="autoColorEnabled ? 'border-[#2D7C5D] bg-[#ECF7F2] text-[#2D7C5D] hover:bg-[#DDEFE7]' : 'border-[#C8D0DA] bg-[#F8FAFC] text-[#2C3A48] hover:bg-[#EEF2F6]'"
+            :disabled="!imageEl || busy"
+            :title="autoColorEnabled ? '恢复未经调色的原始照片' : '使用 autocolor-go 自动校正白平衡、曝光、色调和饱和度'"
+            @click="toggleAutoColor"
+          >
+            {{ autoColorEnabled ? '恢复原图' : '一键调色' }}
+          </button>
           <button v-if="!batchBusy" class="h-9 rounded-[3px] border border-[#C8D0DA] bg-[#F8FAFC] px-4 text-sm font-semibold text-[#2C3A48] hover:bg-[#EEF2F6]" :disabled="!photoQueue.length" @click="processBatchImages">
             批量处理
           </button>

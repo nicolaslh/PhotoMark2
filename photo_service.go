@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/png"
 	"io"
 	"mime"
 	"net/http"
@@ -17,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	autocolor "github.com/nicolaslh/autocolor-go"
 )
 
 type PhotoService struct{}
@@ -40,6 +44,20 @@ type SavedImage struct {
 type LoadedImage struct {
 	Info    *ImageInfo `json:"info"`
 	DataURL string     `json:"dataURL"`
+}
+
+type AutoColorReport struct {
+	RedGain    float64 `json:"redGain"`
+	GreenGain  float64 `json:"greenGain"`
+	BlueGain   float64 `json:"blueGain"`
+	BlackPoint float64 `json:"blackPoint"`
+	WhitePoint float64 `json:"whitePoint"`
+}
+
+type AutoColorResult struct {
+	Path    string          `json:"path"`
+	DataURL string          `json:"dataURL"`
+	Report  AutoColorReport `json:"report"`
 }
 
 type AmapAddress struct {
@@ -140,6 +158,79 @@ func (s *PhotoService) LoadImage(path string) (*LoadedImage, error) {
 		Info:    info,
 		DataURL: "data:" + info.MimeType + ";base64," + base64.StdEncoding.EncodeToString(data),
 	}, nil
+}
+
+// AutoColorImage applies the print-oriented autocolor pipeline to either a
+// local image path or a browser-provided data URL. The source is never changed.
+func (s *PhotoService) AutoColorImage(source string) (*AutoColorResult, error) {
+	sourceImage, err := decodeAutoColorSource(source)
+	if err != nil {
+		return nil, err
+	}
+
+	processor, err := autocolor.New(autocolor.DefaultConfig())
+	if err != nil {
+		return nil, fmt.Errorf("初始化一键调色失败: %w", err)
+	}
+	corrected, report, err := processor.ProcessWithReport(context.Background(), sourceImage)
+	if err != nil {
+		return nil, fmt.Errorf("一键调色失败: %w", err)
+	}
+
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, corrected); err != nil {
+		return nil, fmt.Errorf("编码调色图片失败: %w", err)
+	}
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(encoded.Bytes())
+	saved, err := s.SaveRenderedImage(dataURL)
+	if err != nil {
+		return nil, fmt.Errorf("缓存调色图片失败: %w", err)
+	}
+
+	return &AutoColorResult{
+		Path:    saved.Path,
+		DataURL: dataURL,
+		Report: AutoColorReport{
+			RedGain:    report.RedGain,
+			GreenGain:  report.GreenGain,
+			BlueGain:   report.BlueGain,
+			BlackPoint: report.BlackPoint,
+			WhitePoint: report.WhitePoint,
+		},
+	}, nil
+}
+
+func decodeAutoColorSource(source string) (image.Image, error) {
+	if strings.HasPrefix(source, "data:") {
+		_, payload, err := splitDataURL(source)
+		if err != nil {
+			return nil, err
+		}
+		decoded, err := base64.StdEncoding.DecodeString(payload)
+		if err != nil {
+			return nil, fmt.Errorf("解码待调色图片失败: %w", err)
+		}
+		img, _, err := image.Decode(bytes.NewReader(decoded))
+		if err != nil {
+			return nil, fmt.Errorf("读取待调色图片失败: %w", err)
+		}
+		return img, nil
+	}
+
+	cleanPath, err := validateImagePath(source)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(cleanPath)
+	if err != nil {
+		return nil, fmt.Errorf("打开待调色图片失败: %w", err)
+	}
+	defer file.Close()
+	img, _, err := image.Decode(file)
+	if err != nil {
+		return nil, fmt.Errorf("读取待调色图片失败: %w", err)
+	}
+	return img, nil
 }
 
 func (s *PhotoService) ReverseGeocodeAmap(latitude float64, longitude float64, key string) (*AmapAddress, error) {

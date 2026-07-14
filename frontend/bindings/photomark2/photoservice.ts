@@ -9,42 +9,54 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
+/**
+ * AutoColorImage applies the print-oriented autocolor pipeline to either a
+ * local image path or a browser-provided data URL. The source is never changed.
+ */
+export function AutoColorImage(source: string): $CancellablePromise<$models.AutoColorResult | null> {
+    return $Call.ByID(2825232886, source).then(($result: any) => {
+        return $$createType1($result);
+    });
+}
+
 export function LoadImage(path: string): $CancellablePromise<$models.LoadedImage | null> {
     return $Call.ByID(3354445334, path).then(($result: any) => {
-        return $$createType1($result);
+        return $$createType3($result);
     });
 }
 
 export function PrintRenderedImage(dataURL: string, orientation: string): $CancellablePromise<$models.SavedImage | null> {
     return $Call.ByID(2655448310, dataURL, orientation).then(($result: any) => {
-        return $$createType3($result);
+        return $$createType5($result);
     });
 }
 
 export function ReadImage(path: string): $CancellablePromise<$models.ImageInfo | null> {
     return $Call.ByID(3115123522, path).then(($result: any) => {
-        return $$createType5($result);
+        return $$createType7($result);
     });
 }
 
 export function ReverseGeocodeAmap(latitude: number, longitude: number, key: string): $CancellablePromise<$models.AmapAddress | null> {
     return $Call.ByID(891056028, latitude, longitude, key).then(($result: any) => {
-        return $$createType7($result);
+        return $$createType9($result);
     });
 }
 
 export function SaveRenderedImage(dataURL: string): $CancellablePromise<$models.SavedImage | null> {
     return $Call.ByID(3194963366, dataURL).then(($result: any) => {
-        return $$createType3($result);
+        return $$createType5($result);
     });
 }
 
 // Private type creation functions
-const $$createType0 = $models.LoadedImage.createFrom;
+const $$createType0 = $models.AutoColorResult.createFrom;
 const $$createType1 = $Create.Nullable($$createType0);
-const $$createType2 = $models.SavedImage.createFrom;
+const $$createType2 = $models.LoadedImage.createFrom;
 const $$createType3 = $Create.Nullable($$createType2);
-const $$createType4 = $models.ImageInfo.createFrom;
+const $$createType4 = $models.SavedImage.createFrom;
 const $$createType5 = $Create.Nullable($$createType4);
-const $$createType6 = $models.AmapAddress.createFrom;
+const $$createType6 = $models.ImageInfo.createFrom;
 const $$createType7 = $Create.Nullable($$createType6);
+const $$createType8 = $models.AmapAddress.createFrom;
+const $$createType9 = $Create.Nullable($$createType8);

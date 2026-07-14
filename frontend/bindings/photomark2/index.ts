@@ -8,6 +8,8 @@ export {
 
 export {
     AmapAddress,
+    AutoColorReport,
+    AutoColorResult,
     ImageInfo,
     LoadedImage,
     SavedImage
